@@ -14,6 +14,20 @@ import "strconv"
 // and reply for an RPC.
 //
 
+type WorkerState int
+
+const (
+	FREE WorkerState = iota
+	AS_MAP
+	AS_REDUCE
+	CLOSE
+)
+
+type IntermediateFileInfo struct {
+	RId  int
+	Name string
+}
+
 type ExampleArgs struct {
 	X int
 }
@@ -22,10 +36,37 @@ type ExampleReply struct {
 	Y int
 }
 
+type QueryTaskArgs struct {
+}
+
+type QueryTaskReply struct {
+	S           WorkerState
+	R           int
+	M           int
+	MId         int
+	RId         int
+	MapFile     string
+	ReduceFiles []string
+}
+
+type FinishMapArgs struct {
+	MId               int
+	IntermediateFiles []IntermediateFileInfo
+}
+
+type FinishMapReply struct {
+}
+
+type FinishReduceArgs struct {
+	RId int
+}
+
+type FinishReduceReply struct {
+}
+
 // Add your RPC definitions here.
 
-
-// Cook up a unique-ish UNIX-domain socket name
+// Cook up a unique-ish UNIX-domain socket Name
 // in /var/tmp, for the master.
 // Can't use the current directory since
 // Athena AFS doesn't support UNIX-domain sockets.
