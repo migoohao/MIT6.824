@@ -42,9 +42,8 @@ type Master struct {
 	r           int
 	s           MasterState
 	mapFiles    []MapFileInfo
-	mapLock     sync.Mutex
+	mu          sync.Mutex
 	reduceFiles []ReduceFileInfo
-	reduceLock  sync.Mutex
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -60,6 +59,8 @@ func (m *Master) Example(args *ExampleArgs, reply *ExampleReply) error {
 }
 
 func (m *Master) QueryTask(args *QueryTaskArgs, reply *QueryTaskReply) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	reply.S = FREE
 	switch m.s {
 	case MAP:
@@ -74,8 +75,8 @@ func (m *Master) QueryTask(args *QueryTaskArgs, reply *QueryTaskReply) error {
 
 func (m *Master) FinishMap(args *FinishMapArgs, reply *FinishMapReply) error {
 	if m.mapFiles[args.MId].state == RUNNING {
-		m.mapLock.Lock()
-		defer m.mapLock.Unlock()
+		m.mu.Lock()
+		defer m.mu.Unlock()
 		m.mapFiles[args.MId].state = FINISHED
 		for _, info := range args.IntermediateFiles {
 			m.reduceFiles[info.RId].names = append(m.reduceFiles[info.RId].names, info.Name)
@@ -87,8 +88,8 @@ func (m *Master) FinishMap(args *FinishMapArgs, reply *FinishMapReply) error {
 
 func (m *Master) FinishReduce(args *FinishReduceArgs, reply *FinishReduceReply) error {
 	if m.reduceFiles[args.RId].state == RUNNING {
-		m.reduceLock.Lock()
-		defer m.reduceLock.Unlock()
+		m.mu.Lock()
+		defer m.mu.Unlock()
 		m.reduceFiles[args.RId].state = FINISHED
 		m.validateReduceDone()
 	}
@@ -114,8 +115,6 @@ func (m *Master) validateReduceDone() {
 }
 
 func (m *Master) assignMapTask(reply *QueryTaskReply) {
-	m.mapLock.Lock()
-	defer m.mapLock.Unlock()
 	for i := range m.mapFiles {
 		if m.mapFiles[i].state == IDLE {
 			m.mapFiles[i].state = RUNNING
@@ -130,8 +129,6 @@ func (m *Master) assignMapTask(reply *QueryTaskReply) {
 }
 
 func (m *Master) assignReduceTask(reply *QueryTaskReply) {
-	m.reduceLock.Lock()
-	defer m.reduceLock.Unlock()
 	for i := range m.reduceFiles {
 		if m.reduceFiles[i].state == IDLE {
 			m.reduceFiles[i].state = RUNNING
@@ -168,28 +165,26 @@ func (m *Master) server() {
 func (m *Master) Done() bool {
 
 	// Your code here.
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.s == DONE
 }
 
 func (m *Master) reset() {
 	for {
-		//Todo change hour to second
 		time.Sleep(10 * time.Second)
-		m.mapLock.Lock()
+		m.mu.Lock()
 		for i := range m.mapFiles {
 			if m.mapFiles[i].state == RUNNING {
 				m.mapFiles[i].state = IDLE
 			}
 		}
-		m.mapLock.Unlock()
-
-		m.reduceLock.Lock()
 		for i := range m.reduceFiles {
 			if m.reduceFiles[i].state == RUNNING {
 				m.reduceFiles[i].state = IDLE
 			}
 		}
-		m.reduceLock.Unlock()
+		m.mu.Unlock()
 	}
 }
 
