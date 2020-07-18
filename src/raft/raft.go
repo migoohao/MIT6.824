@@ -18,12 +18,11 @@ package raft
 //
 
 import (
+	"labrpc"
 	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"../labrpc"
 )
 
 // import "bytes"
@@ -358,9 +357,9 @@ func (rf *Raft) sendHeartbeats() {
 	}
 }
 
-func (rf *Raft)asyncHeartbeats(i int, args AppendEntriesArgs)  {
+func (rf *Raft) asyncHeartbeats(i int, args AppendEntriesArgs) {
 	reply := AppendEntriesReply{}
-	if ok:= rf.sendAppendEntries(i, &args, &reply); ok {
+	if ok := rf.sendAppendEntries(i, &args, &reply); ok {
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
 		if args.Term == rf.currentTerm && reply.Term > rf.currentTerm {
@@ -369,7 +368,7 @@ func (rf *Raft)asyncHeartbeats(i int, args AppendEntriesArgs)  {
 	}
 }
 
-func (rf *Raft)asyncRequestVote(i int, args RequestVoteArgs, vote *int32) {
+func (rf *Raft) asyncRequestVote(i int, args RequestVoteArgs, vote *int32) {
 	reply := RequestVoteReply{}
 	if ok := rf.sendRequestVote(i, &args, &reply); ok {
 		rf.mu.Lock()
