@@ -212,7 +212,6 @@ type AppendEntriesReply struct {
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	DPrintf("term:%v %v receive heartbeats request from %v Term %v leaderCommit %v", rf.currentTerm, rf.me, args.LeaderId, args.Term, args.LeaderCommit)
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	logLen := len(rf.log)
@@ -223,16 +222,23 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.voteFor = VoteNon
 		reply.Term = rf.currentTerm
 		reply.Success = rf.updateLog(args)
+		DPrintf("term:%v %v receive heartbeats request from %v Term %v leaderCommit %v pLogIndex %v plogTerm %v entries %v success %v",
+			rf.currentTerm, rf.me, args.LeaderId, args.Term, args.LeaderCommit, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), reply.Success)
 		return
 	}
-	if rf.role != WORKER || args.Term < rf.currentTerm || logLen <= args.PrevLogIndex || rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+	if rf.role == LEADER || args.Term < rf.currentTerm || logLen <= args.PrevLogIndex || rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
 		reply.Term = rf.currentTerm
 		reply.Success = false
+		DPrintf("term:%v %v receive heartbeats request from %v Term %v leaderCommit %v pLogIndex %v plogTerm %v entries %v success %v",
+			rf.currentTerm, rf.me, args.LeaderId, args.Term, args.LeaderCommit, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), reply.Success)
 		return
 	}
 	rf.tick = OK
+	rf.role = WORKER
 	reply.Term = rf.currentTerm
 	reply.Success = rf.updateLog(args)
+	DPrintf("term:%v %v receive heartbeats request from %v Term %v leaderCommit %v pLogIndex %v plogTerm %v entries %v success %v",
+		rf.currentTerm, rf.me, args.LeaderId, args.Term, args.LeaderCommit, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), reply.Success)
 }
 
 func (rf *Raft) updateLog(args *AppendEntriesArgs) bool {
@@ -392,11 +398,14 @@ func (rf *Raft) turnToWorker() {
 func (rf *Raft) sendElection(args RequestVoteArgs) {
 	DPrintf("term:%v %v want to be leader, start election", rf.currentTerm, rf.me)
 	var vote int
+	vch := make(chan int)
 	for i, _ := range rf.peers {
 		if i != rf.me {
-			go rf.asyncRequestVote(i, args, &vote)
+			go rf.asyncRequestVote(i, args, &vote, vch)
 		}
 	}
+	// must have one reply at least
+	<-vch
 }
 
 func (rf *Raft) sendHeartbeats() {
@@ -445,7 +454,6 @@ func (rf *Raft) asyncHeartbeats(i int, args AppendEntriesArgs) {
 		if reply.Success {
 			rf.matchIndex[i] = args.PrevLogIndex + len(args.Entries)
 			rf.nextIndex[i] = rf.matchIndex[i] + 1
-			rf.updateCommit()
 		} else {
 			term := rf.log[rf.nextIndex[i]-1].Term
 			for k := rf.nextIndex[i] - 1; k > 0; k-- {
@@ -480,9 +488,10 @@ func (rf *Raft) updateCommit() {
 	}
 }
 
-func (rf *Raft) asyncRequestVote(i int, args RequestVoteArgs, vote *int) {
+func (rf *Raft) asyncRequestVote(i int, args RequestVoteArgs, vote *int, vch chan int) {
 	reply := RequestVoteReply{}
 	ok := rf.sendRequestVote(i, &args, &reply)
+	vch <- 1
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if ok {
@@ -498,6 +507,14 @@ func (rf *Raft) asyncRequestVote(i int, args RequestVoteArgs, vote *int) {
 			if *vote >= len(rf.peers)/2 {
 				rf.tick = OK
 				rf.role = LEADER
+				for i, _ := range rf.nextIndex {
+					rf.nextIndex[i] = 1
+					rf.matchIndex[i] = 0
+					if i == rf.me {
+						rf.matchIndex[i] = len(rf.log) - 1
+						rf.nextIndex[i] = rf.matchIndex[i] + 1
+					}
+				}
 				DPrintf("term:%v: %v win, claim to be leader", rf.currentTerm, rf.me)
 			}
 		}
