@@ -1,10 +1,10 @@
 package kvraft
 
 import (
-	"labgob"
-	"labrpc"
+	"../labgob"
+	"../labrpc"
 	"log"
-	"raft"
+	"../raft"
 	"sync"
 	"sync/atomic"
 )
@@ -17,6 +17,7 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	}
 	return
 }
+
 
 type Op struct {
 	// Your definitions here.
@@ -35,6 +36,7 @@ type KVServer struct {
 
 	// Your definitions here.
 }
+
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
