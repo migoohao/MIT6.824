@@ -18,11 +18,12 @@ package raft
 //
 
 import (
-	"labrpc"
 	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"../labrpc"
 )
 
 // import "bytes"
