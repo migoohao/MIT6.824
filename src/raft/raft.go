@@ -469,7 +469,10 @@ func (rf *Raft) sendHeartbeats() {
 				args.Term = rf.currentTerm
 				args.PrevLogTerm = 0
 				args.PrevLogIndex = 0
-				args.Entries = rf.log[rf.nextIndex[i]:]
+				args.Entries = make([]LogEntry, 0)
+				for _, log := range rf.log[rf.nextIndex[i]:] {
+					args.Entries = append(args.Entries, log)
+				}
 				args.LeaderCommit = rf.commitIndex
 				preLogIndex := rf.nextIndex[i] - 1
 				if preLogIndex > 0 {
