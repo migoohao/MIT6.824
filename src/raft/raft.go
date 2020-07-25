@@ -177,24 +177,47 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	DPrintf("term:%v %v receive vote request from %v Term %v", rf.currentTerm, rf.me, args.CandidateId, args.Term)
 	if args.Term < rf.currentTerm {
-		reply.Term = rf.currentTerm
-		reply.VoteGranted = false
-		DPrintf("term:%v: %v refuse to vote for %v, Term %v", rf.currentTerm, rf.me, args.CandidateId, args.Term)
+		rf.voteFail(reply)
+		DPrintf("raft:%v role:%v term:%v refuse to vote for raft:%v term:%v, because candidate term is outdated",
+			rf.me, getRoleName(rf.role), rf.currentTerm, args.CandidateId, args.Term)
 		return
 	}
-	lastLogIndex := len(rf.log) - 1
-	if args.Term > rf.currentTerm || rf.voteFor == VoteNon || rf.voteFor == args.CandidateId ||
-		args.LastLogTerm > rf.log[lastLogIndex].Term || (args.LastLogTerm == rf.log[lastLogIndex].Term && args.LastLogIndex > lastLogIndex) {
-		rf.role = WORKER
-		rf.tick = OK
-		rf.voteFor = args.CandidateId
-		rf.currentTerm = args.Term
-		reply.Term = rf.currentTerm
-		reply.VoteGranted = true
-		DPrintf("term:%v: %v vote for %v, Term %v", rf.currentTerm, rf.me, args.CandidateId, args.Term)
+	if args.Term > rf.currentTerm {
+		rf.updateTerm(args.Term)
 	}
+	if rf.voteFor != VoteNon && rf.voteFor != args.CandidateId {
+		rf.voteFail(reply)
+		DPrintf("raft:%v role:%v term:%v refuse to vote for raft:%v term:%v, because has voted for %v",
+			rf.me, getRoleName(rf.role), rf.currentTerm, args.CandidateId, args.Term, rf.voteFor)
+		return
+	}
+	reply.Term = rf.currentTerm
+	reply.VoteGranted = rf.checkCandidateLog(args)
+}
+
+func (rf *Raft) voteFail(reply *RequestVoteReply) {
+	reply.Term = rf.currentTerm
+	reply.VoteGranted = false
+}
+
+func (rf *Raft) checkCandidateLog(args *RequestVoteArgs) bool {
+	lastLogIndex := len(rf.log) - 1
+	if args.LastLogTerm < rf.log[lastLogIndex].Term {
+		DPrintf("raft:%v role:%v term:%v refuse to vote for raft:%v term:%v, because args.LastLogTerm:%v < rf.log[%v].Term:%v",
+			rf.me, getRoleName(rf.role), rf.currentTerm, args.CandidateId, args.Term, args.LastLogTerm, lastLogIndex, rf.log[lastLogIndex].Term)
+		return false
+	}
+	if args.LastLogTerm == rf.log[lastLogIndex].Term && args.LastLogIndex < lastLogIndex {
+		DPrintf("raft:%v role:%v term:%v refuse to vote for raft:%v term:%v, because args.LastLogIndex:%v < lastLogIndex:%v in same lastLogTerm:%v ",
+			rf.me, getRoleName(rf.role), rf.currentTerm, args.CandidateId, args.Term, args.LastLogIndex, lastLogIndex, args.LastLogTerm)
+		return false
+	}
+	rf.tick = OK
+	rf.voteFor = args.CandidateId
+	DPrintf("raft:%v role:%v term:%v vote for raft:%v term:%v",
+		rf.me, getRoleName(rf.role), rf.currentTerm, args.CandidateId, args.Term)
+	return true
 }
 
 type AppendEntriesArgs struct {
@@ -214,42 +237,58 @@ type AppendEntriesReply struct {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	logLen := len(rf.log)
-	if args.Term > rf.currentTerm {
-		rf.currentTerm = args.Term
-		rf.role = WORKER
-		rf.tick = OK
-		rf.voteFor = VoteNon
-		reply.Term = rf.currentTerm
-		reply.Success = rf.updateLog(args)
-		DPrintf("term:%v %v receive heartbeats request from %v Term %v leaderCommit %v pLogIndex %v plogTerm %v entries %v success %v",
-			rf.currentTerm, rf.me, args.LeaderId, args.Term, args.LeaderCommit, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), reply.Success)
+	if args.Term < rf.currentTerm {
+		DPrintf("raft:%v role:%v term:%v receive append request from raft:%v term:%v, refuse",
+			rf.me, getRoleName(rf.role), rf.currentTerm, args.LeaderId, args.Term)
+		rf.appendReplyFalse(reply)
 		return
 	}
-	if rf.role == LEADER || args.Term < rf.currentTerm || logLen <= args.PrevLogIndex || rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
-		reply.Term = rf.currentTerm
-		reply.Success = false
-		DPrintf("term:%v %v receive heartbeats request from %v Term %v leaderCommit %v pLogIndex %v plogTerm %v entries %v success %v",
-			rf.currentTerm, rf.me, args.LeaderId, args.Term, args.LeaderCommit, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), reply.Success)
-		return
+	if args.Term > rf.currentTerm {
+		rf.updateTerm(args.Term)
 	}
 	rf.tick = OK
-	rf.role = WORKER
 	reply.Term = rf.currentTerm
 	reply.Success = rf.updateLog(args)
-	DPrintf("term:%v %v receive heartbeats request from %v Term %v leaderCommit %v pLogIndex %v plogTerm %v entries %v success %v",
-		rf.currentTerm, rf.me, args.LeaderId, args.Term, args.LeaderCommit, args.PrevLogIndex, args.PrevLogTerm, len(args.Entries), reply.Success)
+}
+
+func (rf *Raft) appendReplyFalse(reply *AppendEntriesReply) {
+	reply.Term = rf.currentTerm
+	reply.Success = false
+}
+
+func (rf *Raft) updateTerm(newTerm int) {
+	DPrintf("raft:%v role:%v term:%v update term to %v, and turn role to %v",
+		rf.me, getRoleName(rf.role), rf.currentTerm, newTerm, getRoleName(WORKER))
+	rf.currentTerm = newTerm
+	rf.role = WORKER
+	rf.voteFor = VoteNon
 }
 
 func (rf *Raft) updateLog(args *AppendEntriesArgs) bool {
-	if len(rf.log) <= args.PrevLogIndex || rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+	if len(rf.log) <= args.PrevLogIndex {
+		DPrintf("raft:%v role:%v term:%v receive append request from raft:%v term:%v, return false, "+
+			"because len(rf.log):%v <= args.PrevLogIndex:%v",
+			rf.me, getRoleName(rf.role), rf.currentTerm, args.LeaderId, args.Term, len(rf.log), args.PrevLogIndex)
 		return false
+	}
+	if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+		DPrintf("raft:%v role:%v term:%v receive append request from raft:%v term:%v, return false, "+
+			"because rf.log[%v].Term:%v != args.PrevLogTerm:%v",
+			rf.me, getRoleName(rf.role), rf.currentTerm, args.LeaderId, args.Term, args.PrevLogIndex,
+			rf.log[args.PrevLogIndex].Term, args.PrevLogTerm)
+		return false
+	}
+	if rf.role == CANDIDATE {
+		rf.updateTerm(args.Term)
 	}
 	rf.log = rf.log[:args.PrevLogIndex+1]
 	for _, log := range args.Entries {
 		rf.log = append(rf.log, log)
 	}
 	oldCommit := rf.commitIndex
+	if args.PrevLogIndex < oldCommit {
+		oldCommit = args.PrevLogIndex
+	}
 	if args.LeaderCommit > rf.commitIndex {
 		rf.commitIndex = args.LeaderCommit
 		if len(rf.log)-1 < args.LeaderCommit {
@@ -257,7 +296,8 @@ func (rf *Raft) updateLog(args *AppendEntriesArgs) bool {
 		}
 	}
 	for i := oldCommit + 1; i <= rf.commitIndex; i++ {
-		DPrintf("term:%v %v commit command %v", rf.currentTerm, rf.me, rf.log[i].Command)
+		DPrintf("raft:%v role:%v term:%v commit command:%v index:%v",
+			rf.me, getRoleName(rf.role), rf.currentTerm, rf.log[i].Command, i)
 		rf.applyCh <- ApplyMsg{
 			CommandValid: true,
 			Command:      rf.log[i].Command,
@@ -338,7 +378,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.nextIndex[rf.me] = len(rf.log)
 	rf.matchIndex[rf.me] = rf.nextIndex[rf.me] - 1
 	index = len(rf.log) - 1
-	DPrintf("term:%v %v return Start true, command %v index %v", term, rf.me, command, index)
+	DPrintf("raft:%v role:%v term:%v return Start true, command:%v index:%v", rf.me, getRoleName(rf.role), rf.currentTerm, command, index)
 	return index, term, isLeader
 }
 
@@ -389,22 +429,21 @@ func (rf *Raft) electionTimeout() {
 }
 
 func (rf *Raft) turnToWorker() {
-	DPrintf("term:%v %v turn to worker", rf.currentTerm, rf.me)
+	DPrintf("raft:%v role:%v term:%v turn to worker", rf.me, getRoleName(rf.role), rf.currentTerm)
 	rf.role = WORKER
 	rf.voteFor = VoteNon
 	rf.tick = OK
 }
 
 func (rf *Raft) sendElection(args RequestVoteArgs) {
-	DPrintf("term:%v %v want to be leader, start election", rf.currentTerm, rf.me)
+	DPrintf("raft:%v role:%v term:%v want to be leader, start election", rf.me, getRoleName(rf.role), rf.currentTerm)
 	var vote int
-	vch := make(chan int, len(rf.peers)-1)
+	vch := make(chan int, len(rf.peers))
 	for i := range rf.peers {
 		if i != rf.me {
 			go rf.asyncRequestVote(i, args, &vote, vch)
 		}
 	}
-	// must have one reply at least
 	for i := 0; i < len(rf.peers)/2; i++ {
 		<-vch
 	}
@@ -458,12 +497,14 @@ func (rf *Raft) asyncHeartbeats(i int, args AppendEntriesArgs) {
 			rf.nextIndex[i] = rf.matchIndex[i] + 1
 		} else {
 			term := rf.log[rf.nextIndex[i]-1].Term
-			for k := rf.nextIndex[i] - 1; k > 0; k-- {
+			for k := rf.nextIndex[i] - 1; k >= 0; k-- {
 				if rf.log[k].Term != term {
 					rf.nextIndex[i] = k + 1
 					break
 				}
 			}
+			DPrintf("raft:%v role:%v term:%v append log to raft:%v term:%v fail, next index change to %v",
+				rf.me, getRoleName(rf.role), rf.currentTerm, i, reply.Term, rf.nextIndex[i])
 		}
 		rf.updateCommit()
 	}
@@ -480,7 +521,8 @@ func (rf *Raft) updateCommit() {
 		}
 		if count > len(rf.matchIndex)/2 {
 			for commit := rf.commitIndex + 1; commit <= nextCommit; commit++ {
-				DPrintf("term:%v %v commit command %v", rf.currentTerm, rf.me, rf.log[commit].Command)
+				DPrintf("raft:%v role:%v term:%v commit command:%v index:%v",
+					rf.me, getRoleName(rf.role), rf.currentTerm, rf.log[commit].Command, commit)
 				rf.applyCh <- ApplyMsg{
 					CommandValid: true,
 					Command:      rf.log[commit].Command,
@@ -508,18 +550,19 @@ func (rf *Raft) asyncRequestVote(i int, args RequestVoteArgs, vote *int, vch cha
 		}
 		if reply.VoteGranted && rf.role == CANDIDATE {
 			*vote++
+			DPrintf("raft:%v role:%v term:%v get a vote from raft:%v term:%v total vote:%v cluster num:%v",
+				rf.me, getRoleName(rf.role), rf.currentTerm, i, reply.Term, *vote, len(rf.peers))
 			if *vote >= len(rf.peers)/2 {
 				rf.tick = OK
 				rf.role = LEADER
 				for i := range rf.nextIndex {
-					rf.nextIndex[i] = 1
+					rf.nextIndex[i] = len(rf.log)
 					rf.matchIndex[i] = 0
 					if i == rf.me {
 						rf.matchIndex[i] = len(rf.log) - 1
-						rf.nextIndex[i] = rf.matchIndex[i] + 1
 					}
 				}
-				DPrintf("term:%v: %v win, claim to be leader", rf.currentTerm, rf.me)
+				DPrintf("raft:%v role:%v term:%v win, claim to be leader", rf.me, getRoleName(rf.role), rf.currentTerm)
 			}
 		}
 	}
@@ -562,4 +605,17 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.sendHeartbeats()
 
 	return rf
+}
+
+func getRoleName(role Role) string {
+	var roleName string
+	switch role {
+	case WORKER:
+		roleName = "worker"
+	case LEADER:
+		roleName = "leader"
+	case CANDIDATE:
+		roleName = "candidate"
+	}
+	return roleName
 }
