@@ -2,4 +2,3 @@ pkg/
 api.key
 *-handin.tar.gz
 .idea
-src/main/mr-tmp/
