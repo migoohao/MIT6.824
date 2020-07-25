@@ -327,7 +327,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	// Your code here (2B).
 	rf.mu.Lock()
-	rf.mu.Unlock()
+	defer rf.mu.Unlock()
 	if rf.role != LEADER {
 		isLeader = false
 		return index, term, isLeader
@@ -338,7 +338,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.nextIndex[rf.me] = len(rf.log)
 	rf.matchIndex[rf.me] = rf.nextIndex[rf.me] - 1
 	index = len(rf.log) - 1
-	DPrintf("term:%v %v return Start true, command %v", term, rf.me, command)
+	DPrintf("term:%v %v return Start true, command %v index %v", term, rf.me, command, index)
 	return index, term, isLeader
 }
 
@@ -399,7 +399,7 @@ func (rf *Raft) sendElection(args RequestVoteArgs) {
 	DPrintf("term:%v %v want to be leader, start election", rf.currentTerm, rf.me)
 	var vote int
 	vch := make(chan int, len(rf.peers)-1)
-	for i, _ := range rf.peers {
+	for i := range rf.peers {
 		if i != rf.me {
 			go rf.asyncRequestVote(i, args, &vote, vch)
 		}
@@ -423,7 +423,7 @@ func (rf *Raft) sendHeartbeats() {
 		args.LeaderId = rf.me
 		rf.tick = OK
 		rf.mu.Unlock()
-		for i, _ := range rf.peers {
+		for i := range rf.peers {
 			if i != rf.me {
 				rf.mu.Lock()
 				args.Term = rf.currentTerm
@@ -470,8 +470,8 @@ func (rf *Raft) asyncHeartbeats(i int, args AppendEntriesArgs) {
 }
 
 func (rf *Raft) updateCommit() {
-	if rf.commitIndex < len(rf.log)-1 {
-		nextCommit := rf.commitIndex + 1
+	for i := len(rf.log) - 1; i > 0 && rf.commitIndex < i; i-- {
+		nextCommit := i
 		count := 0
 		for _, match := range rf.matchIndex {
 			if nextCommit <= match {
@@ -479,13 +479,15 @@ func (rf *Raft) updateCommit() {
 			}
 		}
 		if count > len(rf.matchIndex)/2 {
-			rf.commitIndex = nextCommit
-			DPrintf("term:%v %v commit command %v", rf.currentTerm, rf.me, rf.log[nextCommit].Command)
-			rf.applyCh <- ApplyMsg{
-				CommandValid: true,
-				Command:      rf.log[nextCommit].Command,
-				CommandIndex: nextCommit,
+			for commit := rf.commitIndex + 1; commit <= nextCommit; commit++ {
+				DPrintf("term:%v %v commit command %v", rf.currentTerm, rf.me, rf.log[commit].Command)
+				rf.applyCh <- ApplyMsg{
+					CommandValid: true,
+					Command:      rf.log[commit].Command,
+					CommandIndex: commit,
+				}
 			}
+			rf.commitIndex = nextCommit
 		}
 	}
 }
@@ -509,7 +511,7 @@ func (rf *Raft) asyncRequestVote(i int, args RequestVoteArgs, vote *int, vch cha
 			if *vote >= len(rf.peers)/2 {
 				rf.tick = OK
 				rf.role = LEADER
-				for i, _ := range rf.nextIndex {
+				for i := range rf.nextIndex {
 					rf.nextIndex[i] = 1
 					rf.matchIndex[i] = 0
 					if i == rf.me {
@@ -548,7 +550,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	//log start from index 1, so index 0 is useless
 	rf.log = make([]LogEntry, 1)
 	rf.nextIndex = make([]int, len(peers))
-	for i, _ := range rf.nextIndex {
+	for i := range rf.nextIndex {
 		rf.nextIndex[i] = 1
 	}
 	rf.matchIndex = make([]int, len(peers))
