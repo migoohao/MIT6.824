@@ -398,14 +398,16 @@ func (rf *Raft) turnToWorker() {
 func (rf *Raft) sendElection(args RequestVoteArgs) {
 	DPrintf("term:%v %v want to be leader, start election", rf.currentTerm, rf.me)
 	var vote int
-	vch := make(chan int)
+	vch := make(chan int, len(rf.peers)-1)
 	for i, _ := range rf.peers {
 		if i != rf.me {
 			go rf.asyncRequestVote(i, args, &vote, vch)
 		}
 	}
 	// must have one reply at least
-	<-vch
+	for i := 0; i < len(rf.peers)/2; i++ {
+		<-vch
+	}
 }
 
 func (rf *Raft) sendHeartbeats() {
